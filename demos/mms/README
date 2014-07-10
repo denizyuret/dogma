@@ -1,0 +1,17 @@
+Demo for the Matlab implementation of MMS contained in DOGMA
+
+Demo
+===============
+The matlab script "demo_mms" contains an example of how to use the MMS
+algorithm. Before running it remember to add the DOGMA directory to the
+MATLAB path.
+
+The data used in the demo is the USPS database.
+For more details, please refer to the MMS paper.
+   
+The mat file with the features can be found at
+http://dogma.sourceforge.net/usps_demo_mms.zip
+Extract the file and put it in the folder demos/data.
+Type "demo_mms", and everything should work!
+
+   Enjoy!

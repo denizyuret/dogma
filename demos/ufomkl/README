@@ -1,0 +1,23 @@
+Demo for the Matlab implementation of UFO-MKL contained in DOGMA
+
+Demo
+===============
+The matlab script "demo_ufomkl" contains an example of how to use the
+UFO-MKL algorithm. Before running it remember to add the DOGMA directory to
+the MATLAB path.
+
+The demo uses the real-world dataset Oxford flowers. To run it you need to
+go the dataset's website
+(http://www.robots.ox.ac.uk/~vgg/data/flowers/17/index.html) and download
+some file.
+
+Once you open the webpage in your favorite web browser, you need to
+download a few files:
+Item 2. The data splits (http://www.robots.ox.ac.uk/~vgg/data/flowers/17/datasplits.mat)
+Item 4. Chi^2 distances CVPR 2006 (http://www.robots.ox.ac.uk/~vgg/data/flowers/17/distancematrices17gcfeat06.mat)
+Item 5. Chi^2 distances ICVGIP 2008 (http://www.robots.ox.ac.uk/~vgg/data/flowers/17/distancematrices17itfeat08.mat)
+   
+When you finish downloading, put all the .mat file in demo/data folder.
+Type "demo_ufomkl", and everything should work!
+
+   Enjoy!

@@ -1,0 +1,124 @@
+Training PA-I model...
+#1 SV:49.00(490)	AER:17.90
+#2 SV:45.35(907)	AER:16.20
+#3 SV:44.23(1327)	AER:15.63
+#4 SV:44.20(1768)	AER:15.53
+#5 SV:43.62(2181)	AER:15.20
+#6 SV:43.17(2590)	AER:15.25
+#7 SV:43.69(3058)	AER:15.34
+#8 SV:43.49(3479)	AER:15.17
+#9 SV:43.52(3917)	AER:15.46
+#10 SV:43.24(4324)	AER:15.35
+Done!
+Number of support vectors last solution:4324
+Number of support vectors averaged solution:4324
+Testing last solution...Done!
+15.18% of errors on the test set.
+Testing averaged solution...Done!
+10.00% of errors on the test set.
+
+Training Perceptron model...
+#1 SV:24.00(240)    AER:24.00
+#2 SV:22.40(448)    AER:22.40
+#3 SV:22.07(662)    AER:22.07
+#4 SV:21.93(877)    AER:21.93
+#5 SV:21.72(1086)   AER:21.72
+#6 SV:21.43(1286)   AER:21.43
+#7 SV:21.77(1524)   AER:21.77
+#8 SV:21.50(1720)   AER:21.50
+#9 SV:21.72(1955)   AER:21.72
+#10 SV:21.56(2156)  AER:21.56
+Done!
+Number of support vectors last solution:2156
+Number of support vectors averaged solution:2156
+Testing last solution...Done!
+27.44% of errors on the test set.
+Testing averaged solution...Done!
+10.11% of errors on the test set.
+
+Training Projectron model...
+#1 SV: 6.70(67)	    proj:17.90	AER:24.60
+#2 SV: 4.00(80)	    proj:18.60	AER:22.60
+#3 SV: 2.80(84)	    proj:19.13	AER:21.93
+#4 SV: 2.23(89)	    proj:19.68	AER:21.90
+#5 SV: 1.92(96)	    proj:19.58	AER:21.50
+#6 SV: 1.60(96)	    proj:19.85	AER:21.45
+#7 SV: 1.39(97)	    proj:20.17	AER:21.56
+#8 SV: 1.26(101)    proj:20.20	AER:21.46
+#9 SV: 1.16(104)    proj:20.44	AER:21.60
+#10 SV: 1.06(106)   proj:20.32	AER:21.38
+Done!
+Number of support vectors last solution:106
+Number of support vectors averaged solution:106
+Testing last solution...Done!
+37.16% of errors on the test set.
+Testing averaged solution...Done!
+ 9.96% of errors on the test set.
+
+Training Projectron++ model...
+#1 SV: 6.50(65)	      proj:13.60	AER:20.10
+#2 SV: 4.00(80)	      proj:13.75	AER:17.75
+#3 SV: 2.93(88)	      proj:13.93	AER:16.87
+#4 SV: 2.30(92)	      proj:14.17	AER:16.48
+#5 SV: 1.96(98)	      proj:14.08	AER:16.04
+#6 SV: 1.63(98)	      proj:14.33	AER:15.97
+#7 SV: 1.41(99)	      proj:14.57	AER:15.99
+#8 SV: 1.27(102)      proj:14.54	AER:15.81
+#9 SV: 1.17(105)      proj:14.88	AER:16.04
+#10 SV: 1.08(108)     proj:14.82	AER:15.90
+Done!
+Number of support vectors last solution:108
+Number of support vectors averaged solution:108
+Testing last solution...Done!
+15.78% of errors on the test set.
+Testing averaged solution...Done!
+10.03% of errors on the test set.
+
+Training RBP...
+#1 SV:10.60(106)	AER:26.10
+#2 SV: 5.30(106)	AER:25.35
+#3 SV: 3.53(106)	AER:24.70
+#4 SV: 2.65(106)	AER:24.62
+#5 SV: 2.12(106)	AER:24.28
+#6 SV: 1.77(106)	AER:23.90
+#7 SV: 1.51(106)	AER:23.97
+#8 SV: 1.32(106)	AER:24.20
+#9 SV: 1.18(106)	AER:24.29
+#10 SV: 1.06(106)	AER:24.09
+Done!
+Number of support vectors last solution:106
+Testing last solution...Done!
+29.39% of errors on the test set.
+
+Training Forgetron (self-tuned)...
+#1 SV:10.60(106)   AER:26.00
+#2 SV: 5.30(106)   AER:23.80
+#3 SV: 3.53(106)   AER:23.90
+#4 SV: 2.65(106)   AER:24.20
+#5 SV: 2.12(106)   AER:23.88
+#6 SV: 1.77(106)   AER:23.53
+#7 SV: 1.51(106)   AER:23.70
+#8 SV: 1.32(106)   AER:23.61
+#9 SV: 1.18(106)   AER:23.76
+#10 SV: 1.06(106)  AER:23.63
+Done!
+Number of support vectors last solution:106
+Testing last solution...Done!
+25.34% of errors on the test set.
+
+Training OISVM...
+#1 SV: 9.90(99)	AER:14.80
+#2 SV: 5.65(113)	AER:12.40
+#3 SV: 4.00(120)	AER:11.53
+#4 SV: 3.15(126)	AER:11.35
+#5 SV: 2.58(129)	AER:11.04
+#6 SV: 2.22(133)	AER:11.00
+#7 SV: 1.99(139)	AER:11.16
+#8 SV: 1.76(141)	AER:10.99
+#9 SV: 1.58(142)	AER:11.04
+#10 SV: 1.44(144)	AER:10.93
+Done!
+Number of support vectors last solution:144
+Testing last solution...Done!
+10.01% of errors on the test set.
+>> 

@@ -1,0 +1,22 @@
+Demo for the Matlab implemenation of the OMCL algorithm in DOGMA
+
+Demo
+===============
+The matlab script "demo_omcl" contains an example of how to use the OMCL
+algorithm. Before running it remember to add the DOGMA directory to
+the MATLAB path.
+
+The data used in the demo are real-world sequences from the IDOL2 database
+(http://cogvis.nada.kth.se/IDOL/). It is composed by 12 sequences acquired
+by the same robot, and was divided into training and testing sets. Each
+cell of the training [train_data] and testing data [test_data] is
+corresponding to one cue type, namely, RGB Color histogram, CRFH histogram,
+Bag-of-SIFT, and Laser Scan sensor features. For more details, please refer
+to the OMCL paper.
+   
+The mat file with the features can be found at
+http://dogma.sourceforge.net/idol2.zip
+Extract the file and put it in the folder demos/data.
+Type "demo_omcl", and everything should work!
+
+   Enjoy!
