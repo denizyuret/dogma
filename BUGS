@@ -1,0 +1,8 @@
+In model_predict.m line 134:
+        max_num_el=100*1024^2/8; %50 Mega of memory as maximum size for K
+        step=ceil(max_num_el/size(model.beta,1));
+should be
+        max_num_el=100*1024^2/8; % 100 Mega of memory as maximum size for K
+        step=ceil(max_num_el/size(model.beta,2));
+
+Direction of model.pred inconsistent between binary (nx1) and multi (cxn).
