@@ -1,25 +1,51 @@
-function m = model_sparsify(model,x_tr,y_tr,x_te,y_te)
+function m = model_sparsify(model,x_tr,y_tr,p)
 % MODEL_SPARSIFY implements an algorithm that reduces the number of
 % support vectors in a kernel based model.  Handles both binary and
 % multiclass models.  Uses the averaged solution (beta2) if available
 % by default.  Does not handle pre-computed kernel matrices.
 %
-%    m = model_sparsify(model,x_tr,y_tr,x_te,y_te) takes
-%    a model, training set (x_tr,y_tr), test set (x_te,y_te) and
-%    returns m, a sparser the model, reporting its train/test set
-%    accuracy.
+%    m = model_sparsify(model,x_tr,y_tr,p) takes a model, a set of
+%    instances to choose new support vectors from (x_tr,y_tr), and
+%    some optional parameters (p) and returns m, a sparser the
+%    model, reporting its train/test set accuracy.  It does not
+%    modify the input model.  It works for any kernel based
+%    model, binary or multi-class.
+%
+%    Define margin of a model for an instance as the difference
+%    between the score of the correct answer and the score of the
+%    closest alternative.  The algorithm tries to achive one of the
+%    following conditions for each instance:
+%
+%    - If margin(model,i) <= 0, ignore instance i.
+% 
+%    - If 0 < margin(model,i) < p.margin, allow m to make a
+%    margin violation at most p.epsilon worse than the original,
+%    i.e. margin(m,i) >= margin(model,i) - p.epsilon
+%
+%    - If margin(model,i) > p.margin, we would like m to satisfy
+%    margin(m,i) >= p.margin - p.epsilon.
+%
+%    Both p.margin and p.epsilon will be multiplied by the mean
+%    of the original positive margins for scaling.
 %
 %    Additional parameters: 
 %
-%    - model.eta is the learning rate.  Default is 0.5.  It will be
-%    multiplied by mean(beta(:)) for scaling.
+%    - p.average determines if the averaged model (model.beta2) will
+%    be used rather than the last model (model.beta).  Default is
+%    1.
 %
-%    - model.epsilon is the margin requirement.  Default is 0.5.  It
-%    will be multiplied by mean(margins(:)) for scaling.  The
-%    algorithm will stop when the approximate solution achieves a
-%    margin for all training vectors (solved correctly by the
-%    original model) that is at least min(epsilon, m-epsilon) where
-%    m is the margin of the original solution.
+%    - p.x_te, p.y_te is an optional development set.  If
+%    supplied the error on the development set will be reported.
+%
+%    - p.eta is the learning rate.  Default is 0.5.  It will be
+%    multiplied by mean(abs(beta(:))) for scaling and determines
+%    the increments applied to m.beta.
+%
+%    - p.epsilon determines the difference acceptable between the
+%    original margins and the new margins.  Default is 0.5.
+%   
+%    - p.margin is the cap for the original margins.  Default is
+%    1.0.
 %
 %   References:
 %     - Cotter, A.; Shalev-Shwartz, S.; Srebro, N. (2013).  Learning
@@ -48,23 +74,26 @@ assert(isfield(model,'beta'), 'Need kernel model');
 assert(isfield(model,'ker') && ~isempty(model.ker), 'Need kernel model');
 
 % Use averaged hyperplain (beta2) by default
-average = 1;
-if (~isfield(model,'beta2')) average=0; end
-if average fprintf('Using averaged solution beta2.\n'); end
+if (nargin < 4) p = []; end
+if (~isfield(p,'average')) p.average = 1; end
+if (~isfield(model,'beta2')) p.average=0; end
+if p.average fprintf('Using averaged solution beta2.\n');
+else fprintf('Using the last solution beta.\n'); end
 
 % Set default margin threshold and learning rate
-if (isfield(model, 'epsilon')==0) model.epsilon = 0.5; end
-if (isfield(model, 'eta')==0) model.eta = 0.5; end
-fprintf('Learning rate (eta)=%g, margin limit (epsilon)=%g\n', ...
-        model.eta, model.epsilon);
+if (isfield(p, 'epsilon')==0) p.epsilon = 0.5; end
+if (isfield(p, 'margin')==0) p.margin = 1.0; end
+if (isfield(p, 'eta')==0) p.eta = 0.5; end
+fprintf('epsilon=%g margin=%g eta=%g\n', p.epsilon, p.margin, p.eta);
 
 % x_tr: dxn training instances
 % y_tr: 1xn training labels (1:c if multi, -1,+1 if binary)
 % model.beta: cxs model coefficients
-n = numel(y_tr);                   % n: number of training instances
+n = numel(y_tr);                % n: number of training instances
 c = size(model.beta, 1);	% c: number of classes if multi, 1 if binary
-fprintf('train: %d, test: %d, classes: %d, nsv: %d\n', ...
-        n, numel(y_te), c, size(model.beta,2));
+nsv = size(model.beta, 2);      % nsv: number of sv in original model
+if (isfield(p, 'y_te')==0) n_te = 0; else n_te = numel(p.y_te); end
+fprintf('train: %d, test: %d, classes: %d, nsv: %d\n', n, n_te, c, nsv);
 
 % scores calculates the cxn score matrix for each class and each instance
 max_num_el=500*1024^2/8; % 500 Mega of memory as maximum size for K
@@ -86,11 +115,11 @@ end
 end % scores
 
 % predicted_labels takes the cxn score matrix and predicts labels
-function p=predicted_labels(f)
+function l=predicted_labels(f)
   if c>1                        % multiclass
-    [~, p] = max(f, [], 1);
+    [~, l] = max(f, [], 1);
   else                          % binary
-    p = sign(f);
+    l = sign(f);
   end
 end
 
@@ -114,7 +143,9 @@ end % margins
 
 tic(); 
 fprintf('Computing initial scores...\n');
-initial_scores = scores(x_tr, model, average);
+initial_scores = scores(x_tr, model, p.average);
+initial_test_scores = [];
+if n_te initial_test_scores = scores(p.x_te, model, p.average); end
 toc();
 
 % computing target margins.  paper assumes svm with
@@ -124,27 +155,17 @@ toc();
 target_margin = margins(initial_scores);
 mean_margin = mean(target_margin(target_margin>0));
 target_margin(target_margin<0) = -inf; % to ignore mistakes in target
-epsilon_scaled = model.epsilon * mean_margin;
-fprintf('Scaled epsilon = %g\n', epsilon_scaled);
-max_target = epsilon_scaled * 2;  % paper uses eps=0.5 and caps targets at 1
-target_margin(target_margin>max_target) = max_target;
+epsilon_scaled = p.epsilon * mean_margin;
+margin_scaled = p.margin * mean_margin;
+fprintf('Scaled epsilon = %g, margin = %g\n', epsilon_scaled, margin_scaled);
+target_margin(target_margin>margin_scaled) = margin_scaled;
 
 % the paper suggests a learning rate of 0.5 for margin=1 and
 % k(x,x)=1.  we will use mean_abs_beta to scale our learning rate.
-if average == 0
-  mean_abs_beta = mean(abs(model.beta(:)));
-else
-  mean_abs_beta = mean(abs(model.beta2(:)));
-end
-eta_scaled = model.eta * mean_abs_beta;
+if (p.average == 0) eta_scaled = p.eta * mean(abs(model.beta(:)));
+else eta_scaled = p.eta * mean(abs(model.beta2(:))); end
 fprintf('Scaled eta = %g\n', eta_scaled);
 
-fprintf('time\titer\tnsv\terr_tr\terr_te\tmax(h-c)\n');
-err_tr = numel(find(predicted_labels(initial_scores) ~= y_tr));
-err_te = numel(find(predicted_labels(scores(x_te,model,average)) ~= y_te));
-fprintf('%d\t%d\t%d\t%d\t%d\t%d\n', 0, 0, size(model.beta, 2), ...
-        err_tr, err_te, 0);
-tic();
 
 % Prepare new model
 m = model;
@@ -154,9 +175,15 @@ m.SV=[];     % dxs support vectors
 m.beta=[];   % cxs support vector weights
 m.beta2=[];  % cxs averaged weights (unused)
 m.pred=zeros(c,n); % cxn score for each training instance
-m.numSV=[];  % tx1 number of SV for each iteration
-m.aer=[];    % tx1 number of errors for each iteration
-m.errTot = 0; % final number of errors
+m.pred_te = []; % c x n_te score for each test instance
+if n_te m.pred_te=zeros(c, n_te); end
+m.numSV=[];  % tx1 number of SV for each iteration (unused)
+m.aer=[];    % tx1 number of errors for each iteration (unused)
+m.errTot = 0; % final number of errors (unused)
+
+% Start clock and report original model performance
+tic(); 
+err_report(initial_scores, initial_test_scores, 0, nsv, 0, 1);
 
 while 1
   m.iter=m.iter+1;
@@ -190,21 +217,26 @@ while 1
     m.beta(:,si) = m.beta(:,si) + d_beta;
   end
   m.pred = m.pred + d_beta * feval(m.ker,m.SV(:,si),x_tr,m.kerparam);
-
-  m.errTot = numel(find(predicted_labels(m.pred) ~= y_tr));
-  m.aer(m.iter) = m.errTot;
-  m.numSV(m.iter)=numel(m.S);
-
+  if n_te 
+    m.pred_te = m.pred_te + d_beta * feval(m.ker,m.SV(:,si),p.x_te,m.kerparam);
+  end
+  m.numSV(m.iter) = numel(m.S);
   if mod(m.numSV(m.iter), m.step) == 0 && m.numSV(m.iter) ~= m.numSV(m.iter-1)
-    err_te = numel(find(predicted_labels(scores(x_te,m,0)) ~= y_te));
-    fprintf('%d\t%d\t%d\t%d\t%d\t%g\n', ...
-            round(toc()), m.iter, numel(m.S), m.errTot, err_te, maxdiff);
+    err_report(m.pred, m.pred_te, m.iter, numel(m.S), maxdiff);
   end % if
 
 end % while
 
-err_te = numel(find(predicted_labels(scores(x_te,m,0)) ~= y_te));
-fprintf('%d\t%d\t%d\t%d\t%d\t%g\n', ...
-        round(toc()), m.iter, numel(m.S), m.errTot, err_te, maxdiff);
+err_report(m.pred, m.pred_te, m.iter, numel(m.S), maxdiff);
+
+function err_report(scores_tr, scores_te, iter, nsv, maxdiff, title)
+if (nargin < 6) title = 0; end
+if title fprintf('time\titer\tnsv\terr_tr\terr_te\tmaxdiff\n'); end
+err_tr = numel(find(predicted_labels(scores_tr) ~= y_tr));
+err_te = 0;
+if n_te err_te = numel(find(predicted_labels(scores_te) ~= p.y_te)); end
+fprintf('%d\t%d\t%d\t%d\t%d\t%d\n', round(toc()), iter, nsv, err_tr, ...
+        err_te, maxdiff);
+end % err_report
 
 end % model_sparsify
