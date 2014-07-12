@@ -1,11 +1,13 @@
-function m = model_sparsify(X,Y,model,average)
+function m = model_sparsify(model,x_tr,y_tr,x_te,y_te)
 % MODEL_SPARSIFY implements an algorithm that reduces the number of
 % support vectors in a kernel based model.  Handles both binary and
 % multiclass models.  Uses the averaged solution (beta2) if available
 % by default.  Does not handle pre-computed kernel matrices.
 %
-%    MODEL = MODEL_SPARSIFY(X,Y,MODEL0,AVERAGE) takes a model already 
-%    trained on X,Y and returns one with fewer support vectors.
+%    m = model_sparsify(model,x_tr,y_tr,x_te,y_te) takes
+%    a model, training set (x_tr,y_tr), test set (x_te,y_te) and
+%    returns m, a sparser the model, reporting its train/test set
+%    accuracy.
 %
 %    Additional parameters: 
 %
@@ -46,36 +48,41 @@ assert(isfield(model,'beta'), 'Need kernel model');
 assert(isfield(model,'ker') && ~isempty(model.ker), 'Need kernel model');
 
 % Use averaged hyperplain (beta2) by default
-if (nargin<4) average=1; end
+average = 1;
 if (~isfield(model,'beta2')) average=0; end
 if average fprintf('Using averaged solution beta2.\n'); end
 
 % Set default margin threshold and learning rate
 if (isfield(model, 'epsilon')==0) model.epsilon = 0.5; end
 if (isfield(model, 'eta')==0) model.eta = 0.5; end
+fprintf('Learning rate (eta)=%g, margin limit (epsilon)=%g\n', ...
+        model.eta, model.epsilon);
 
-% X: dxn training instances
-% Y: 1xn training labels (1:c if multi, -1,+1 if binary)
+% x_tr: dxn training instances
+% y_tr: 1xn training labels (1:c if multi, -1,+1 if binary)
 % model.beta: cxs model coefficients
-n = numel(Y);                   % n: number of training instances
+n = numel(y_tr);                   % n: number of training instances
 c = size(model.beta, 1);	% c: number of classes if multi, 1 if binary
-max_num_el=500*1024^2/8; % 500 Mega of memory as maximum size for K
-xstep=ceil(max_num_el/size(model.beta, 2));
-fprintf('Instances: %d, classes: %d, nsv: %d\n', n, c, size(model.beta,2));
+fprintf('train: %d, test: %d, classes: %d, nsv: %d\n', ...
+        n, numel(y_te), c, size(model.beta,2));
 
 % scores calculates the cxn score matrix for each class and each instance
-function f=scores(x)
-f = zeros(c, n);
-for i=1:xstep:n
-  K = feval(model.ker, model.SV, x(:,i:min(i+xstep-1,n)),model.kerparam);
-  if average==0
-    f(:,i:min(i+xstep-1,n)) = model.beta*K+model.b;
+max_num_el=500*1024^2/8; % 500 Mega of memory as maximum size for K
+
+function f=scores(x,mo,avg)
+nc = size(mo.beta, 1);
+nx = size(x, 2);
+nsv = size(mo.beta, 2);
+f = zeros(nc, nx);
+xstep=ceil(max_num_el/nsv);
+for i=1:xstep:nx
+  K = feval(mo.ker, mo.SV, x(:,i:min(i+xstep-1,nx)),mo.kerparam);
+  if avg==0
+    f(:,i:min(i+xstep-1,nx)) = mo.beta*K+mo.b;
   else
-    f(:,i:min(i+xstep-1,n)) = model.beta2*K+model.b2;
+    f(:,i:min(i+xstep-1,nx)) = mo.beta2*K+mo.b2;
   end
-  fprintf('.');
 end
-fprintf('\n');
 end % scores
 
 % predicted_labels takes the cxn score matrix and predicts labels
@@ -92,11 +99,11 @@ end
 % returns z, a 1xn matrix of best wrong answers: argmax[y~=yi] f(y,i)
 % for binary models m = y .* f and there is no z
 % Yi: 1D indices of correct answers for multi
-if (c>1) Yi = Y + c*[0:n-1]; end
+if (c>1) Yi = y_tr + c*[0:n-1]; end
 
 function [d,z]=margins(f)
 if (c == 1)
-  d = Y .* f;
+  d = y_tr .* f;
 else
   fYi = f(Yi);                  % save all correct answers
   f(Yi) = -inf;                 % replace them with -inf
@@ -106,10 +113,8 @@ end % if
 end % margins
 
 tic(); 
-fprintf('Computing scores for the input model in %d chunks\n', ceil(n/xstep));
-initial_scores = scores(X);
-initial_error = numel(find(predicted_labels(initial_scores) ~= Y));
-fprintf('Initial nsv=%d error=%d/%d\n', size(model.beta, 2), initial_error, n);
+fprintf('Computing initial scores...\n');
+initial_scores = scores(x_tr, model, average);
 toc();
 
 % computing target margins.  paper assumes svm with
@@ -120,7 +125,7 @@ target_margin = margins(initial_scores);
 mean_margin = mean(target_margin(target_margin>0));
 target_margin(target_margin<0) = -inf; % to ignore mistakes in target
 epsilon_scaled = model.epsilon * mean_margin;
-fprintf('Scaled epsilon = %f\n', epsilon_scaled);
+fprintf('Scaled epsilon = %g\n', epsilon_scaled);
 max_target = epsilon_scaled * 2;  % paper uses eps=0.5 and caps targets at 1
 target_margin(target_margin>max_target) = max_target;
 
@@ -132,7 +137,14 @@ else
   mean_abs_beta = mean(abs(model.beta2(:)));
 end
 eta_scaled = model.eta * mean_abs_beta;
-fprintf('Scaled eta = %f\n', eta_scaled);
+fprintf('Scaled eta = %g\n', eta_scaled);
+
+fprintf('time\titer\tnsv\terr_tr\terr_te\tmax(h-c)\n');
+err_tr = numel(find(predicted_labels(initial_scores) ~= y_tr));
+err_te = numel(find(predicted_labels(scores(x_te,model,average)) ~= y_te));
+fprintf('%d\t%d\t%d\t%d\t%d\t%d\n', 0, 0, size(model.beta, 2), ...
+        err_tr, err_te, 0);
+tic();
 
 % Prepare new model
 m = model;
@@ -145,7 +157,6 @@ m.pred=zeros(c,n); % cxn score for each training instance
 m.numSV=[];  % tx1 number of SV for each iteration
 m.aer=[];    % tx1 number of errors for each iteration
 m.errTot = 0; % final number of errors
-fprintf('iter\tnsv\terr\tmax(h-c)\n');
 
 while 1
   m.iter=m.iter+1;
@@ -161,15 +172,15 @@ while 1
       break                     % quit if no violation
     end
     m.S(end+1) = xi;        % add new sv if violation
-    m.SV(:,end+1) = X(:,xi);
+    m.SV(:,end+1) = x_tr(:,xi);
     si = numel(m.S);
   end
 
   if c == 1                     % binary update
-    d_beta = Y(xi) * eta_scaled;
+    d_beta = y_tr(xi) * eta_scaled;
   else                          % multiclass update
     d_beta = zeros(c, 1);
-    d_beta(Y(xi)) = eta_scaled;
+    d_beta(y_tr(xi)) = eta_scaled;
     d_beta(z(xi)) = -eta_scaled;
   end
   if si > size(m.beta, 2)
@@ -178,18 +189,22 @@ while 1
   else
     m.beta(:,si) = m.beta(:,si) + d_beta;
   end
-  m.pred = m.pred + d_beta * feval(m.ker,m.SV(:,si),X,m.kerparam);
+  m.pred = m.pred + d_beta * feval(m.ker,m.SV(:,si),x_tr,m.kerparam);
 
-  m.errTot = numel(find(predicted_labels(m.pred) ~= Y));
+  m.errTot = numel(find(predicted_labels(m.pred) ~= y_tr));
   m.aer(m.iter) = m.errTot;
   m.numSV(m.iter)=numel(m.S);
 
   if mod(m.numSV(m.iter), m.step) == 0 && m.numSV(m.iter) ~= m.numSV(m.iter-1)
-    fprintf('%d\t%d\t%d\t%g\n', m.iter, numel(m.S), m.errTot, maxdiff);
+    err_te = numel(find(predicted_labels(scores(x_te,m,0)) ~= y_te));
+    fprintf('%d\t%d\t%d\t%d\t%d\t%g\n', ...
+            round(toc()), m.iter, numel(m.S), m.errTot, err_te, maxdiff);
   end % if
 
 end % while
 
-fprintf('%d\t%d\t%d\t%g\n', m.iter, numel(m.S), m.errTot, maxdiff);
+err_te = numel(find(predicted_labels(scores(x_te,m,0)) ~= y_te));
+fprintf('%d\t%d\t%d\t%d\t%d\t%g\n', ...
+        round(toc()), m.iter, numel(m.S), m.errTot, err_te, maxdiff);
 
 end % model_sparsify
