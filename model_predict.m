@@ -132,7 +132,7 @@ else % dual model
 
         nt = size(x,2);
         max_num_el=100*1024^2/8; %50 Mega of memory as maximum size for K
-        step=ceil(max_num_el/size(model.beta,1));
+        step=ceil(max_num_el/size(model.beta,2));
         for i=1:step:nt
             if isfield(model,'X')
                 K = feval(model.ker,model.X(:,model.S),x(:,i:min(i+step-1,nt)),model.kerparam);
