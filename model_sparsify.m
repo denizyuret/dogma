@@ -173,13 +173,15 @@ m.iter = 0;  % training iterations
 m.S=[];      % 1xs support vector indices
 m.SV=[];     % dxs support vectors
 m.beta=[];   % cxs support vector weights
-m.beta2=[];  % cxs averaged weights (unused)
-m.pred=zeros(c,n); % cxn score for each training instance
-m.pred_te = []; % c x n_te score for each test instance
-if n_te m.pred_te=zeros(c, n_te); end
-m.numSV=[];  % tx1 number of SV for each iteration (unused)
-m.aer=[];    % tx1 number of errors for each iteration (unused)
-m.errTot = 0; % final number of errors (unused)
+rmfield(m, 'beta2');            % cxs averaged weights (unused)
+rmfield(m, 'pred');             % cxn score for each training instance
+rmfield(m, 'numSV');            % tx1 number of SV for each iteration (unused)
+rmfield(m, 'aer');              % tx1 number of errors for each iteration (unused)
+rmfield(m, 'errTot');           % final number of errors (unused)
+
+pred_tr = zeros(c,n);           % cxn score for each training instance
+pred_te = zeros(c,n_te);        % cxn_te score for each test instance
+nsv = 0;                        % number of support vectors
 
 % Start clock and report original model performance
 tic(); 
@@ -187,7 +189,7 @@ err_report(initial_scores, initial_test_scores, 0, nsv, 0, 1);
 
 while 1
   m.iter=m.iter+1;
-  [d,z] = margins(m.pred);
+  [d,z] = margins(pred_tr);
   mdiff = target_margin - d;
 
   [maxdiff, si] = max(mdiff(m.S)); % Aggressive version:
@@ -216,18 +218,17 @@ while 1
   else
     m.beta(:,si) = m.beta(:,si) + d_beta;
   end
-  m.pred = m.pred + d_beta * feval(m.ker,m.SV(:,si),x_tr,m.kerparam);
+  pred_tr = pred_tr + d_beta * feval(m.ker,m.SV(:,si),x_tr,m.kerparam);
   if n_te 
-    m.pred_te = m.pred_te + d_beta * feval(m.ker,m.SV(:,si),p.x_te,m.kerparam);
+    pred_te = pred_te + d_beta * feval(m.ker,m.SV(:,si),p.x_te,m.kerparam);
   end
-  m.numSV(m.iter) = numel(m.S);
-  if mod(m.numSV(m.iter), m.step) == 0 && m.numSV(m.iter) ~= m.numSV(m.iter-1)
-    err_report(m.pred, m.pred_te, m.iter, numel(m.S), maxdiff);
+  if ((mod(numel(m.S), m.step) == 0) && (numel(m.S) ~= nsv))
+    err_report(pred_tr, pred_te, m.iter, numel(m.S), maxdiff);
   end % if
-
+  nsv = numel(m.S);
 end % while
 
-err_report(m.pred, m.pred_te, m.iter, numel(m.S), maxdiff);
+err_report(pred_tr, pred_te, m.iter, numel(m.S), maxdiff);
 
 function err_report(scores_tr, scores_te, iter, nsv, maxdiff, title)
 if (nargin < 6) title = 0; end
