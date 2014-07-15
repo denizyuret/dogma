@@ -76,14 +76,14 @@ assert(isfield(model,'ker') && ~isempty(model.ker), 'Need kernel model');
 % Use averaged hyperplain (beta2) by default
 if (nargin < 4) p = []; end
 if (~isfield(p,'average')) p.average = 1; end
-if (~isfield(model,'beta2')) p.average=0; end
+if (~isfield(model,'beta2') || isempty(model.beta2)) p.average = 0; end
 if p.average fprintf('Using averaged solution beta2.\n');
 else fprintf('Using the last solution beta.\n'); end
 
 % Set default margin threshold and learning rate
-if (isfield(p, 'epsilon')==0) p.epsilon = 0.5; end
-if (isfield(p, 'margin')==0) p.margin = 1.0; end
-if (isfield(p, 'eta')==0) p.eta = 0.5; end
+if (~isfield(p, 'epsilon')) p.epsilon = 0.5; end
+if (~isfield(p, 'margin')) p.margin = 1.0; end
+if (~isfield(p, 'eta')) p.eta = 0.5; end
 fprintf('epsilon=%g margin=%g eta=%g\n', p.epsilon, p.margin, p.eta);
 
 % x_tr: dxn training instances
@@ -92,13 +92,15 @@ fprintf('epsilon=%g margin=%g eta=%g\n', p.epsilon, p.margin, p.eta);
 n = numel(y_tr);                % n: number of training instances
 c = size(model.beta, 1);	% c: number of classes if multi, 1 if binary
 nsv = size(model.beta, 2);      % nsv: number of sv in original model
-if (isfield(p, 'y_te')==0) n_te = 0; else n_te = numel(p.y_te); end
+n_te = 0;			% n_te: number of test instances
+if isfield(p, 'y_te') n_te = numel(p.y_te); end
+max_num_el=500*1024^2/8; % 500 Mega of memory as maximum size for K
+if (c>1) Yi = y_tr + c*[0:n-1]; end % Yi: 1D indices of correct answers for multi
 fprintf('train: %d, test: %d, classes: %d, nsv: %d\n', n, n_te, c, nsv);
 
 % scores calculates the cxn score matrix for each class and each instance
-max_num_el=500*1024^2/8; % 500 Mega of memory as maximum size for K
-
-function f=scores(x,mo,avg)
+% only called in the beginning for scores of the initial model
+function f=scores(x,mo,av)
 nc = size(mo.beta, 1);
 nx = size(x, 2);
 nsv = size(mo.beta, 2);
@@ -106,7 +108,7 @@ f = zeros(nc, nx);
 xstep=ceil(max_num_el/nsv);
 for i=1:xstep:nx
   K = feval(mo.ker, mo.SV, x(:,i:min(i+xstep-1,nx)),mo.kerparam);
-  if avg==0
+  if av==0
     f(:,i:min(i+xstep-1,nx)) = mo.beta*K+mo.b;
   else
     f(:,i:min(i+xstep-1,nx)) = mo.beta2*K+mo.b2;
@@ -124,12 +126,9 @@ function l=predicted_labels(f)
 end
 
 % margins() takes f, a cxn matrix of scores
-% returns m, a 1xn matrix of margins: f(yi,i) - max[y~=yi] f(y,i)
+% returns d, a 1xn matrix of margins: f(yi,i) - max[y~=yi] f(y,i)
 % returns z, a 1xn matrix of best wrong answers: argmax[y~=yi] f(y,i)
-% for binary models m = y .* f and there is no z
-% Yi: 1D indices of correct answers for multi
-if (c>1) Yi = y_tr + c*[0:n-1]; end
-
+% for binary models d = y .* f and there is no z
 function [d,z]=margins(f)
 if (c == 1)
   d = y_tr .* f;
@@ -140,6 +139,17 @@ else
   d = fYi - maxf;               % margin is the difference
 end % if
 end % margins
+
+% err_report gives periodic updates during training
+function err_report(scores_tr, scores_te, iter, nsv, maxdiff, title)
+if (nargin < 6) title = 0; end
+if title fprintf('time\titer\tnsv\terr_tr\terr_te\tmaxdiff\n'); end
+err_tr = numel(find(predicted_labels(scores_tr) ~= y_tr));
+err_te = 0;
+if n_te err_te = numel(find(predicted_labels(scores_te) ~= p.y_te)); end
+fprintf('%d\t%d\t%d\t%d\t%d\t%d\n', round(toc()), iter, nsv, err_tr, ...
+        err_te, maxdiff);
+end % err_report
 
 tic(); 
 fprintf('Computing initial scores...\n');
@@ -166,29 +176,25 @@ if (p.average == 0) eta_scaled = p.eta * mean(abs(model.beta(:)));
 else eta_scaled = p.eta * mean(abs(model.beta2(:))); end
 fprintf('Scaled eta = %g\n', eta_scaled);
 
-
-% Prepare new model
+% Prepare new model by deleting all support vectors
 m = model;
-m.iter = 0;  % training iterations
 m.S=[];      % 1xs support vector indices
 m.SV=[];     % dxs support vectors
 m.beta=[];   % cxs support vector weights
-rmfield(m, 'beta2');            % cxs averaged weights (unused)
-rmfield(m, 'pred');             % cxn score for each training instance
-rmfield(m, 'numSV');            % tx1 number of SV for each iteration (unused)
-rmfield(m, 'aer');              % tx1 number of errors for each iteration (unused)
-rmfield(m, 'errTot');           % final number of errors (unused)
+if isfield(m,'beta2') m.beta2=[]; end;  % cxs averaged support vector weights
+newbeta=[];  % new support vector weights
 
 pred_tr = zeros(c,n);           % cxn score for each training instance
 pred_te = zeros(c,n_te);        % cxn_te score for each test instance
 nsv = 0;                        % number of support vectors
+iter = 0;			% number of sparsify iterations
 
 % Start clock and report original model performance
 tic(); 
 err_report(initial_scores, initial_test_scores, 0, nsv, 0, 1);
 
 while 1
-  m.iter=m.iter+1;
+  iter=iter+1;
   [d,z] = margins(pred_tr);
   mdiff = target_margin - d;
 
@@ -212,32 +218,31 @@ while 1
     d_beta(y_tr(xi)) = eta_scaled;
     d_beta(z(xi)) = -eta_scaled;
   end
-  if si > size(m.beta, 2)
-    assert(si == 1 + size(m.beta, 2));
-    m.beta(:,si) = d_beta;
+  if si > size(newbeta, 2)
+    assert(si == 1 + size(newbeta, 2));
+    newbeta(:,si) = d_beta;
   else
-    m.beta(:,si) = m.beta(:,si) + d_beta;
+    newbeta(:,si) = newbeta(:,si) + d_beta;
   end
   pred_tr = pred_tr + d_beta * feval(m.ker,m.SV(:,si),x_tr,m.kerparam);
-  if n_te 
-    pred_te = pred_te + d_beta * feval(m.ker,m.SV(:,si),p.x_te,m.kerparam);
-  end
+  if n_te pred_te = pred_te + d_beta * feval(m.ker,m.SV(:,si),p.x_te,m.kerparam); end
   if ((mod(numel(m.S), m.step) == 0) && (numel(m.S) ~= nsv))
-    err_report(pred_tr, pred_te, m.iter, numel(m.S), maxdiff);
+    err_report(pred_tr, pred_te, iter, numel(m.S), maxdiff);
   end % if
   nsv = numel(m.S);
 end % while
 
-err_report(pred_tr, pred_te, m.iter, numel(m.S), maxdiff);
+err_report(pred_tr, pred_te, iter, numel(m.S), maxdiff);
 
-function err_report(scores_tr, scores_te, iter, nsv, maxdiff, title)
-if (nargin < 6) title = 0; end
-if title fprintf('time\titer\tnsv\terr_tr\terr_te\tmaxdiff\n'); end
-err_tr = numel(find(predicted_labels(scores_tr) ~= y_tr));
-err_te = 0;
-if n_te err_te = numel(find(predicted_labels(scores_te) ~= p.y_te)); end
-fprintf('%d\t%d\t%d\t%d\t%d\t%d\n', round(toc()), iter, nsv, err_tr, ...
-        err_te, maxdiff);
-end % err_report
+% make new beta a scaled down version of newbeta
+% keeping the same norm as old beta at the same number of SV.
+assert(nsv == size(newbeta,2));
+assert(nsv <= size(model.beta,2));
+n1 = norm(model.beta(:,1:nsv), 'fro');
+n2 = norm(newbeta, 'fro');
+m.beta = newbeta * (n1 / n2);
+
+% keep beta2 empty.  we do want to erase the averaging memory and let \
+% it start from scratch.
 
 end % model_sparsify
