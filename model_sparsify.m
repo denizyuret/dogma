@@ -165,9 +165,11 @@ if gpu
   tic(); fprintf('Sending data to gpu\n');
   f = zeros(nc,nx,'gpuArray');
   sv = gpuArray(sv);
+  svtr = sv';			% gpu needs temp space for this?
   beta = gpuArray(beta);
   toc(); fprintf('gpudev.FreeMemory=%g\n', gpudev.FreeMemory);
-  xstep = floor(0.9*gpudev.FreeMemory/(8*2*ns));
+  xstep = floor(0.9*(gpudev.FreeMemory/(8*2*ns)));
+  clear svtr;
 else
   f = zeros(nc,nx);
   xstep = floor(max_num_el/(2*ns));
