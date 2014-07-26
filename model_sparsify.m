@@ -342,7 +342,7 @@ if n.tr > max_tr_size
   fprintf('Subsampling x_tr from %d to %d instances to fit in gpu.\n', n.tr, max_tr_size);
   % We should take all SV and pick the rest randomly
   sample = 1:n.tr;
-  sorted = sort(model.S);
+  sorted = sort(unique(model.S));
   for i=1:numel(sorted);
     s = sorted(i);
     assert(sample(s) == s);
