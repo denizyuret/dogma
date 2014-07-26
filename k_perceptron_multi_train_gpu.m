@@ -49,6 +49,11 @@ assert(strcmp(hp.type,'poly'), 'Only poly kernel models supported.\n');
 nd = size(X, 1);
 nx = size(X, 2);
 nc = max(Y);
+if isempty(model.SV)
+  ns = 0;
+else
+  ns = size(model.SV, 2);
+end
 
 if isfield(model,'n_cla')==0
   model.n_cla=nc;
@@ -56,7 +61,7 @@ end
 assert(nc == model.n_cla);
 assert(nx == numel(Y));
 
-fprintf('nd=%d nx=%d nc=%d\nResetting gpu.\n', nd, nx, nc);
+fprintf('nd=%d nx=%d nc=%d ns=%d\nResetting gpu.\n', nd, nx, nc, ns);
 tic;gpu=gpuDevice(1);toc;
 sv_buffer_size = 10000;
 
@@ -66,8 +71,8 @@ if isfield(model,'iter')==0
   model.beta=zeros(nc, 0, 'gpuArray');
   model.beta2=zeros(nc, 0, 'gpuArray');
   model.S = zeros(1, 0, 'gpuArray');
-  model.SVtr1 = [];
-  model.SVtr2 = zeros(sv_buffer_size, nd, 'gpuArray');
+  SVtr1 = [];
+  SVtr2 = zeros(sv_buffer_size, nd, 'gpuArray');
   model.errTot=0;
   model.numSV=zeros(nx,1);
   model.aer=zeros(nx,1);
@@ -81,8 +86,8 @@ else
   model.beta = gpuArray(model.beta);
   model.beta2 = gpuArray(model.beta2);
   model.S = gpuArray(model.S);
-  model.SVtr1 = gpuArray(model.SV');
-  model.SVtr2 = zeros(sv_buffer_size, nd, 'gpuArray'); % stupid matlab copies on subasgn, need to keep separate
+  SVtr1 = gpuArray(model.SV');
+  SVtr2 = zeros(sv_buffer_size, nd, 'gpuArray'); % stupid matlab copies on subasgn, need to keep separate
   ns1 = size(model.SV, 2);
   ns2 = 0;
   ns = ns1 + ns2;
@@ -112,6 +117,7 @@ if isfield(model,'batchsize')==0
   model.batchsize=1000;
 end
 batchsize_warning = 0;
+fprintf('Using batchsize=%d\n', model.batchsize);
 
 if isfield(model,'epochs')==0
   model.epochs = 1;
@@ -127,8 +133,8 @@ for epoch=1:model.epochs
     % compute the real batchsize here based on memory
     ns = size(model.beta,2);
     assert(ns == ns1+ns2);
-    assert(ns1 == size(model.SVtr1, 1));
-    assert(ns2 <= size(model.SVtr2, 1));
+    assert(ns1 == size(SVtr1, 1));
+    assert(ns2 <= size(SVtr2, 1));
     nk = floor((gpu.FreeMemory/8) / (2*ns+2*nd+5*nc+10));
     nk = min(nk, model.batchsize);
     assert(nk >= 1);
@@ -156,12 +162,12 @@ for epoch=1:model.epochs
       % wait(gpuDevice);fprintf('g=%g calculating val_f.\n', gpu.FreeMemory/8);
 
       if ns1 > 0
-        k1 = (hp.gamma * full(model.SVtr1 * X(:,i:j)) + hp.coef0) .^ hp.degree;
+        k1 = (hp.gamma * full(SVtr1 * X(:,i:j)) + hp.coef0) .^ hp.degree;
       else 
         k1 = [];
       end
       if ns2 > 0
-        k2 = (hp.gamma * full(model.SVtr2(1:ns2,:) * X(:,i:j)) + hp.coef0) .^ hp.degree;
+        k2 = (hp.gamma * full(SVtr2(1:ns2,:) * X(:,i:j)) + hp.coef0) .^ hp.degree;
       else
         k2 = [];
       end
@@ -276,13 +282,13 @@ for epoch=1:model.epochs
 
       % Grow SVtr2 if necessary
       nu = numel(updates_i);
-      if ns2 + nu > size(model.SVtr2, 1)
-        model.SVtr2 = [model.SVtr2; zeros(nu + sv_buffer_size, nd)];
+      if ns2 + nu > size(SVtr2, 1)
+        SVtr2 = [SVtr2; zeros(nu + sv_buffer_size, nd)];
         wait(gpuDevice);
       end
 
       % wait(gpuDevice);fprintf('g=%g udpating model_SVtr.\n', gpu.FreeMemory/8);
-      model.SVtr2(ns2+1:ns2+nu,:) = X(:,updates_i)'; % 1921us, 281407usbig
+      SVtr2(ns2+1:ns2+nu,:) = X(:,updates_i)'; % 1921us, 281407usbig
       ns2 = ns2 + nu;
       ns = ns + nu;
 
@@ -354,7 +360,7 @@ fprintf('#%.0f SV:%5.2f(%d)\tAER:%5.2f\tt=%g\n', ...
 model.beta = gather(model.beta);
 model.beta2 = gather(model.beta2);
 model.S = gather(model.S);
-model.SV = [gather(model.SVtr1) gather(model.SVtr2(1:ns2,:))];
-clear model.SVtr1 model.SVtr2;
+model.SV = [gather(SVtr1)' gather(SVtr2(1:ns2,:))'];
+clear SVtr1 SVtr2;
 
 end % k_perceptron_multi_train_gpu
