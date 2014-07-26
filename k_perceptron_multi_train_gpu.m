@@ -40,25 +40,57 @@ function model = k_perceptron_multi_train_gpu(X,Y,model)
 %
 %    Contact the author: francesco [at] orabona.com
 
-n = length(Y);   % number of training samples
+% Make sure we have a poly kernel model
+assert(isfield(model,'ker') && ~isempty(model.ker) && isfield(model,'kerparam'),...
+       'Only kernel models supported.\n');
+hp = model.kerparam;
+assert(strcmp(hp.type,'poly'), 'Only poly kernel models supported.\n');
+
+nd = size(X, 1);
+nx = size(X, 2);
+nc = max(Y);
 
 if isfield(model,'n_cla')==0
-  model.n_cla=max(Y);
+  model.n_cla=nc;
 end
+assert(nc == model.n_cla);
+assert(nx == numel(Y));
+
+fprintf('nd=%d nx=%d nc=%d\nResetting gpu.\n', nd, nx, nc);
+tic;gpu=gpuDevice(1);toc;
+sv_buffer_size = 10000;
 
 if isfield(model,'iter')==0
+  fprintf('Initializing new model.\n');
   model.iter=0;
-  model.beta=zeros(model.n_cla, 0, 'gpuArray');
-  model.beta2=zeros(model.n_cla, 0, 'gpuArray');
+  model.beta=zeros(nc, 0, 'gpuArray');
+  model.beta2=zeros(nc, 0, 'gpuArray');
   model.S = zeros(1, 0, 'gpuArray');
-  model.SV = zeros(size(X, 1), 0, 'gpuArray');
+  model.SVtr1 = [];
+  model.SVtr2 = zeros(sv_buffer_size, nd, 'gpuArray');
   model.errTot=0;
-  model.numSV=zeros(numel(Y),1);
-  model.aer=zeros(numel(Y),1);
-  model.pred=zeros(model.n_cla,numel(Y));
+  model.numSV=zeros(nx,1);
+  model.aer=zeros(nx,1);
+  model.pred=zeros(nc,nx);
+  ns1 = 0;
+  ns2 = 0;
+  ns = ns1 + ns2;
 else
-  assert(isfield(model,'ker'), 'Cannot continue training using a Kernel matrix as input.');
+  assert(isfield(model,'ker'), ['Cannot continue training using a Kernel matrix as input.']);
+  fprintf('g=%g Loading model to gpu...\n', gpu.FreeMemory/8);tic;
+  model.beta = gpuArray(model.beta);
+  model.beta2 = gpuArray(model.beta2);
+  model.S = gpuArray(model.S);
+  model.SVtr1 = gpuArray(model.SV');
+  model.SVtr2 = zeros(sv_buffer_size, nd, 'gpuArray'); % stupid matlab copies on subasgn, need to keep separate
+  ns1 = size(model.SV, 2);
+  ns2 = 0;
+  ns = ns1 + ns2;
+  wait(gpuDevice);
+  toc;
 end
+fprintf('g=%g Model on gpu...\n', gpu.FreeMemory/8);
+toc;
 
 if isfield(model,'update')==0
   model.update=1; % max-score
@@ -77,8 +109,9 @@ end
 %end
 
 if isfield(model,'batchsize')==0
-  model.batchsize=1;
+  model.batchsize=1000;
 end
+batchsize_warning = 0;
 
 if isfield(model,'epochs')==0
   model.epochs = 1;
@@ -86,34 +119,58 @@ end
 
 tic();
 for epoch=1:model.epochs
-  % we should shuffle here?
+  % we should shuffle here?  it would make S indices meaningless.
 
-  for i=1:model.batchsize:n               % 26986us/iter to process X(:,i:i+500)
-    j = min(n, i + model.batchsize - 1);
+  i = 1;
+  while (i <= nx)               % 26986us/iter to process X(:,i:i+500)
+
+    % compute the real batchsize here based on memory
+    ns = size(model.beta,2);
+    assert(ns == ns1+ns2);
+    assert(ns1 == size(model.SVtr1, 1));
+    assert(ns2 <= size(model.SVtr2, 1));
+    nk = floor((gpu.FreeMemory/8) / (2*ns+2*nd+5*nc+10));
+    nk = min(nk, model.batchsize);
+    assert(nk >= 1);
+    if (nk < model.batchsize && ~batchsize_warning)
+      fprintf('g=%g Going to batchsize <= %d due to memory limit.\n', gpu.FreeMemory/8, nk);
+      batchsize_warning=1;
+    end
+
+    j = min(nx, i + nk - 1);
     ij = j-i+1;
     model.iter=model.iter+1;
-    %if model.iter == 3 return; end
-    %fprintf('iter=%d i=%d j=%d\n', model.iter, i, j);
 
-    model.ttimes=model.ttimes+1;
+    %ti=0;model.ttimes=model.ttimes+1;
     %ti=1;wait(gpuDevice); model.t(ti) = model.t(ti)+toc();
 
     if numel(model.S)>0                   % 8065us, 3289479us
 
-      model.ttimes2 = model.ttimes2 + 1;
+      
+      %ti=0;model.ttimes2 = model.ttimes2 + 1;
       %ti=20;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-      if isempty(model.ker)
-        K_x=X(model.S,i:j);
-      else
-        K_x=feval(model.ker,model.SV,X(:,i:j),model.kerparam); % 5639us (for batchsize=500,dim=804,nsv<2000)
+
+      % K_x=feval(model.ker,model.SV,X(:,i:j),model.kerparam); % 5639us (for batchsize=500,dim=804,nsv<2000)
                                                                % 2896019us (for batch=1250,dim=804,nsv~100K)
+
+      % wait(gpuDevice);fprintf('g=%g calculating val_f.\n', gpu.FreeMemory/8);
+
+      if ns1 > 0
+        k1 = (hp.gamma * full(model.SVtr1 * X(:,i:j)) + hp.coef0) .^ hp.degree;
+      else 
+        k1 = [];
       end
+      if ns2 > 0
+        k2 = (hp.gamma * full(model.SVtr2(1:ns2,:) * X(:,i:j)) + hp.coef0) .^ hp.degree;
+      else
+        k2 = [];
+      end
+      val_f = model.b + model.beta * [k1; k2];
+      clear k1 k2;
 
       %ti=21;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-      val_f=model.beta*K_x;               % 985us (500x2000), 354539us (1250x100K)
+      %val_f=model.beta*K_x;               % 985us (500x2000), 354539us (1250x100K)
       %ti=22;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-      clear K_x;
-
       %     val_f = zeros(model.n_cla, model.batchsize, 'gpuArray');
       %     %fprintf('val_f=%s/%s (%d,%d)\n', class(val_f), classUnderlying(val_f), size(val_f));
       %     %fprintf('K_x=%s/%s (%d,%d)\n', class(K_x), classUnderlying(K_x), size(K_x));
@@ -126,25 +183,40 @@ for epoch=1:model.epochs
     else
       val_f=zeros(model.n_cla, ij, 'gpuArray');
     end % if numel(model.S)>0
-        %fprintf('val_f=%s/%s (%d,%d)\n', class(val_f), classUnderlying(val_f), size(val_f));
-        %dbg_vf = val_f
-
-    %ti=2;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
     
+    %fprintf('val_f=%s/%s (%d,%d)\n', class(val_f), classUnderlying(val_f), size(val_f));
+    %dbg_vf = val_f
+    %ti=2;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
     % Yi=Y(i);
+
+    % wait(gpuDevice);fprintf('g=%g calculating Yi.\n', gpu.FreeMemory/8);
+      
     Yi = gpuArray(int32(Y(i:j)) + model.n_cla*int32(0:ij-1)); % 1018us
-                                                              %fprintf('Yi=%s/%s (%d,%d)\n', class(Yi), classUnderlying(Yi), size(Yi));
-                                                              %dbg_yij = Y(i:j)
-                                                              %dbg_yi = Yi
+
+    %fprintf('Yi=%s/%s (%d,%d)\n', class(Yi), classUnderlying(Yi), size(Yi));
+    %dbg_yij = Y(i:j)
+    %dbg_yi = Yi
     %ti=3;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+
+    % wait(gpuDevice);fprintf('g=%g calculating tmp.\n', gpu.FreeMemory/8);
+
     tmp=val_f;                            % 922us
+
     %ti=4;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+
     tmp(Yi)=-inf;                         % 1200us
-                                          %fprintf('tmp=%s/%s (%d,%d)\n', class(tmp), classUnderlying(tmp), size(tmp));
-                                          %dbg_tmp = tmp
+
+    %fprintf('tmp=%s/%s (%d,%d)\n', class(tmp), classUnderlying(tmp), size(tmp));
+    %dbg_tmp = tmp
     %ti=5;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+
+    % wait(gpuDevice);fprintf('g=%g getting max tmp.\n', gpu.FreeMemory/8);
+
     [mx_val,idx_mx_val]=max(gather(tmp));         % 983us
     clear tmp;
+
+    % wait(gpuDevice);fprintf('g=%g cleared tmp.\n', gpu.FreeMemory/8);
+
     %ti=6;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
     %fprintf('mx_val=%s (%d,%d)\n', class(mx_val), size(mx_val));
     %dbg_mx_val = mx_val
@@ -152,147 +224,114 @@ for epoch=1:model.epochs
     %dbg_idx_mx_val = idx_mx_val
 
     model.errTot=model.errTot+gather(sum(val_f(Yi)<=mx_val)); % 1186us
-                                                              %dbg_errTot = model.errTot
+
+    %dbg_errTot = model.errTot
+
     model.aer(model.iter)=model.errTot/(model.iter * model.batchsize);
+
     %dbg_aer = model.aer(model.iter)
     % model.pred(:,model.iter)=val_f;
     %ti=7;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
     
+    % wait(gpuDevice);fprintf('g=%g calculating tr_val.\n', gpu.FreeMemory/8);
+
     tr_val = val_f(Yi);                   % 996us
+
     %ti=8;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+
+    % wait(gpuDevice);fprintf('g=%g clear val_f Yi.\n', gpu.FreeMemory/8);
+
     clear val_f Yi;
+
     %ti=9;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
     
+    % wait(gpuDevice);fprintf('g=%g updates.\n', gpu.FreeMemory/8);
+
     updates = find(tr_val <= mx_val);     % 1219us
+
+    % wait(gpuDevice);fprintf('g=%g clear tr_val.\n', gpu.FreeMemory/8);
+
+    clear tr_val;
+
     %ti=10;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
     if ~isempty(updates)                % 299614usbig
 
-      model.ttimes3 = model.ttimes3 + 1;
+      %ti=0;model.ttimes3 = model.ttimes3 + 1;
       %ti=30;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+
+      % wait(gpuDevice);fprintf('g=%g updates_i.\n', gpu.FreeMemory/8);
+
       updates_i = updates+i-1;              % 
+
       %ti=31;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+
+      % wait(gpuDevice);fprintf('g=%g model_S.\n', gpu.FreeMemory/8);
 
       model.S = [model.S updates_i];        % 969us
                                             %dbg_S = model.S
       %ti=32;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
-      if ~isempty(model.ker)
-        model.SV = [model.SV X(:,updates_i)]; % 1921us, 281407usbig
+      % wait(gpuDevice);fprintf('g=%g checking size model_SVtr.\n', gpu.FreeMemory/8);
+
+      % Grow SVtr2 if necessary
+      nu = numel(updates_i);
+      if ns2 + nu > size(model.SVtr2, 1)
+        model.SVtr2 = [model.SVtr2; zeros(nu + sv_buffer_size, nd)];
+        wait(gpuDevice);
       end
+
+      % wait(gpuDevice);fprintf('g=%g udpating model_SVtr.\n', gpu.FreeMemory/8);
+      model.SVtr2(ns2+1:ns2+nu,:) = X(:,updates_i)'; % 1921us, 281407usbig
+      ns2 = ns2 + nu;
+      ns = ns + nu;
+
       %fprintf('model.SV=%s/%s (%d,%d)\n', class(model.SV), classUnderlying(model.SV), size(model.SV));
       %ti=33;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
+      % wait(gpuDevice);fprintf('g=%g newbeta.\n', gpu.FreeMemory/8);
+
       newbeta = zeros(model.n_cla, numel(updates), 'gpuArray'); % 982us
+
       %ti=34;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
       mx_val_updates = gpuArray(int32(idx_mx_val(updates)) + model.n_cla*int32(0:numel(updates)-1)); % 1171us
+
       %ti=35;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
       tr_val_updates = gpuArray(int32(Y(updates_i)) + model.n_cla*int32(0:numel(updates)-1)); % 1157us
+
       %ti=36;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
       newbeta(tr_val_updates) = 1;          % 1144us
+
       %ti=37;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
       newbeta(mx_val_updates) = -1;         % 1141us
-      %ti=38;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
+      %ti=38;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
       %fprintf('newbeta=%s/%s (%d,%d)\n', class(newbeta), classUnderlying(newbeta), size(newbeta));
       %fprintf('model.beta=%s/%s (%d,%d)\n', class(model.beta), classUnderlying(model.beta), size(model.beta));
 
       model.beta2 = model.beta2 + model.beta;
+
       %ti=39;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+
       model.beta2 = [model.beta2 newbeta];
+
       %ti=40;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
       model.beta = [model.beta newbeta];    % 972us
                                             %dbg_model_beta = model.beta
       %ti=41;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+
       clear newbeta mx_val_updates tr_val_updates updates_i;
+
       %ti=42;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
     end % if ~isempty(updates)
+
     clear updates;
-
-    %   % if model.ttimes > 2 return; end
-    %   if 0
-
-    %   for k=1:numel(tr_val)                 % 2921103us
-    %     model.ttimes3 = model.ttimes3 + 1;
-    %     ti=30;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %     jj = i + k - 1;
-    %     % if val_f(Yi)<=mx_val
-    %     if tr_val(k) <= mx_val(k)           % 3072us
-    %       model.ttimes4 = model.ttimes4 + 1;
-    %       ti=40;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %       model.S(end+1)=jj;          % 1058us
-    
-    %       %fprintf('model.S=%s/%s (%d,%d)\n', class(model.S), classUnderlying(model.S), size(model.S));
-    %       %dbg_S = model.S
-
-    %       ti=41;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %       if ~isempty(model.ker)
-    %         model.SV(:,end+1)=X(:,jj);         % 1440us
-    %       end
-    %       %fprintf('model.SV=%s/%s (%d,%d)\n', class(model.SV), classUnderlying(model.SV), size(model.SV));
-    %       %fprintf('model.SV(:,%d)=X(:,%d)\n', size(model.SV,2), jj);
-    %       ti=42;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-
-    %       model.beta(:,end+1)=zeros(model.n_cla,1);% 1044us
-    %       %fprintf('model.beta=%s/%s (%d,%d)\n', class(model.beta), classUnderlying(model.beta), size(model.beta));
-    %       %dbg_beta = model.beta
-    %       ti=43;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-
-    %       if model.update==1
-    %         % max-score
-    %         model.beta(Y(jj),end)=1;             % 1026us
-    %         ti=44;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %         model.beta(idx_mx_val(k),end)=-1;    % 1019us
-    %         ti=45;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %       else
-    %         % uniform
-    %         model.beta(:,end)=-1/(model.n_cla-1);
-    %         model.beta(Y(jj),end)=1;
-    %       end
-    %       ti=46;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %       %fprintf('model.beta=%s/%s (%d,%d)\n', class(model.beta), classUnderlying(model.beta), size(model.beta));
-    %       %dbg_beta_updated = model.beta
-    
-    %       if model.maxSV==inf
-    %         model.beta2(:,end+1)=zeros(model.n_cla,1); % 1049us
-    %       end
-    %       ti=47;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %       %fprintf('model.beta2=%s/%s (%d,%d)\n', class(model.beta2), classUnderlying(model.beta2), size(model.beta2));
-    %       %dbg_beta2 = model.beta2
-    
-    %       if numel(model.S)>model.maxSV
-    %         mn_idx=ceil(model.maxSV*rand);
-    %         model.beta(:,mn_idx)=[];
-    %         if isfield(model,'ker')
-    %           model.SV(:,mn_idx)=[];
-    %         end
-    %         model.S(mn_idx)=[];
-    %       end %if 
-    %       ti=48;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %     end %   if val_f(Yi)<=mx_val
-    %     ti=31;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %     if model.maxSV==inf
-    %       model.beta2=model.beta2+model.beta; % 973us
-    %     end
-    %     ti=32;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %     %fprintf('model.beta2=%s/%s (%d,%d)\n', class(model.beta2), classUnderlying(model.beta2), size(model.beta2));
-    %     %dbg_beta2_updated = model.beta2
-    
-    %     model.numSV(jj)=numel(model.S); % 908us
-    %     ti=33;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    
-    %   end % for k=1:numel(tr_val)
-
-    %   ti=9;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
-    %   assert(jj == j);                      % 927us
-
-    %   end % if 0
 
     %ti=11;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
@@ -303,7 +342,10 @@ for epoch=1:model.epochs
 
     %ti=12;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
-  end % for i=1:model.batchsize:n
+    i = j+1;
+
+  end % while i <= nx
+
 end % for epoch=1:model.epochs
 
 fprintf('#%.0f SV:%5.2f(%d)\tAER:%5.2f\tt=%g\n', ...
@@ -312,6 +354,7 @@ fprintf('#%.0f SV:%5.2f(%d)\tAER:%5.2f\tt=%g\n', ...
 model.beta = gather(model.beta);
 model.beta2 = gather(model.beta2);
 model.S = gather(model.S);
-model.SV = gather(model.SV);
+model.SV = [gather(model.SVtr1) gather(model.SVtr2(1:ns2,:))];
+clear model.SVtr1 model.SVtr2;
 
 end % k_perceptron_multi_train_gpu
