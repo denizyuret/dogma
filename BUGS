@@ -5,4 +5,22 @@ should be
         max_num_el=100*1024^2/8; % 100 Mega of memory as maximum size for K
         step=ceil(max_num_el/size(model.beta,2));
 
+===
+
 Direction of model.pred inconsistent between binary (nx1) and multi (cxn).
+
+===
+
+In k_perceptron_multi_train.m on line 129:
+    if mod(i,model.step)==0
+      fprintf('#%.0f SV:%5.2f(%d)\tAER:%5.2f\n', ...
+            ceil(i/1000),numel(model.S)/model.iter*100,numel(model.S),model.aer(model.iter)*100);
+    end
+should be
+    if mod(model.iter,model.step)==0
+      fprintf('#%.0f SV:%5.2f(%d)\tAER:%5.2f\n', ...
+            ceil(model.iter/1000),numel(model.S)/model.iter*100,numel(model.S),model.aer(model.iter)*100);
+    end
+in order to have any output with incremental training.
+
+===
