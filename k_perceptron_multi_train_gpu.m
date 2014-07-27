@@ -135,7 +135,7 @@ for epoch=1:model.epochs
     assert(ns == ns1+ns2);
     assert(ns1 == size(SVtr1, 1));
     assert(ns2 <= size(SVtr2, 1));
-    nk = floor((gpu.FreeMemory/8) / (2*ns+2*nd+5*nc+10));
+    nk = floor(0.9 * (gpu.FreeMemory/8) / (2*ns+2*nd+5*nc+10));
     nk = min(nk, model.batchsize);
     assert(nk >= 1);
     if (nk < model.batchsize && ~batchsize_warning)
