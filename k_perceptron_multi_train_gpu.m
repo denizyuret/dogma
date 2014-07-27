@@ -1,4 +1,4 @@
-function model = k_perceptron_multi_train_gpu_dbg(X,Y,model)
+function model = k_perceptron_multi_train_gpu(X,Y,model)
 % K_PERCEPTRON_MULTI_TRAIN Kernel Perceptron multiclass algorithm
 %
 %    MODEL = K_PERCEPTRON_MULTI_TRAIN(X,Y,MODEL) trains a multiclass
@@ -122,7 +122,8 @@ for epoch=1:model.epochs
 
     % Compute the real batchsize here based on memory
     assert(ns == size(model.beta,2));
-    nk = floor((gpu.FreeMemory/8) / (ns+sv_block_size+2*nd+5*nc+10));
+    wait(gpuDevice);
+    nk = floor(0.9 * (gpu.FreeMemory/8) / (2*ns+2*nd+5*nc+10));
     nk = min(nk, model.batchsize);
     assert(nk >= 1);
     if (nk < model.batchsize && ~batchsize_warning)
@@ -133,23 +134,17 @@ for epoch=1:model.epochs
     j = min(nx, i + nk - 1);
     ij = j-i+1;
 
-    ti=0;model.ttimes=model.ttimes+1;
-    ti=1;wait(gpuDevice); model.t(ti) = model.t(ti)+toc();
+    %ti=0;model.ttimes=model.ttimes+1;
+    %ti=1;wait(gpuDevice); model.t(ti) = model.t(ti)+toc();
 
     val_f=zeros(nc, ij, 'gpuArray');
-    if ns>0                   % 484802us
+    if ns>0                             % 484802us
       xij=gpuArray(X(:,i:j));           % 27027us for batchsize=1250
       svi=1;
       for svblock=1:numel(SVtr)         % 219109us
-
-      ti=0;model.ttimes2=model.ttimes2+1;
-      ti=20;wait(gpuDevice);model.t(ti)=model.t(ti)+toc;
         sv = SVtr{svblock};             % 1727us
-      ti=21;wait(gpuDevice);model.t(ti)=model.t(ti)+toc;
         svj = svi + size(sv, 1) - 1;    % 929us
-      ti=22;wait(gpuDevice);model.t(ti)=model.t(ti)+toc;
         val_f = val_f + model.beta(:,svi:svj) * (hp.gamma * full(sv * xij) + hp.coef0) .^ hp.degree; % 166061us
-      ti=23;wait(gpuDevice);model.t(ti)=model.t(ti)+toc;
         svi = svj + 1;
       end
       clear xij;
@@ -157,7 +152,7 @@ for epoch=1:model.epochs
       if model.b~=0 val_f = model.b + val_f; end
     end % if ns>0
 
-    ti=2;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+    %ti=2;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
       
     Yi = gpuArray(int32(Y(i:j)) + model.n_cla*int32(0:ij-1)); % 1018us
     tmp=val_f;                            % 922us
@@ -176,12 +171,9 @@ for epoch=1:model.epochs
     updates = find(tr_val <= mx_val);     % 1219us
     clear tr_val mx_val;
 
-    ti=9;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+    %ti=9;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
     if ~isempty(updates)                % 33587us
-
-      %ti=0;model.ttimes2 = model.ttimes2 + 1;
-      %ti=20;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
       updates_i = updates+i-1;              % 
       model.S = [model.S updates_i];        % 969us
@@ -193,9 +185,15 @@ for epoch=1:model.epochs
       if nu + size(SVtr{end}, 1) > sv_block_size
         assert(numel(SVtr) <= 2);
         if (numel(SVtr) == 2)
+          fprintf('g:%g merging sv blocks %dx%d %dx%d\n', gpu.FreeMemory/8, ...
+                  size(SVtr{1}), size(SVtr{2}));
           sv1 = [ gather(SVtr{1}); gather(SVtr{2}) ];
           clear SVtr{1}; clear SVtr{2}; wait(gpuDevice);
-          SVtr{1} = gpuArray(sv1);
+          fprintf('g:%g merging to one sv block %dx%d=%d\n', ...
+                  gpu.FreeMemory/8, size(sv1), numel(sv1));
+          SVtr{1} = gpuArray(sv1); wait(gpuDevice);
+          clear sv1;
+          fprintf('g:%g done with merge\n', gpu.FreeMemory/8);
         end
         SVtr{2} = zeros(0, nd, 'gpuArray');
       end
@@ -220,7 +218,7 @@ for epoch=1:model.epochs
 
     clear updates;
 
-    ti=10;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
+    % ti=10;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
     if mod(model.iter,model.step)==0      % 1037us
       fprintf('#%.0f g:%g nk:%d SV:%5.2f(%d)\tAER:%5.2f\tt=%g\n', ...
@@ -233,8 +231,8 @@ for epoch=1:model.epochs
 
 end % for epoch=1:model.epochs
 
-fprintf('#%.0f SV:%5.2f(%d)\tAER:%5.2f\tt=%g\n', ...
-        j,numel(model.S)/j*100,numel(model.S),model.aer(model.iter)*100,toc());
+fprintf('#%.0f g:%g nk:%d SV:%5.2f(%d)\tAER:%5.2f\tt=%g\n', ...
+        j, gpu.FreeMemory/8,nk,numel(model.S)/j*100,numel(model.S),model.aer(model.iter)*100,toc());
 
 model.beta = gather(model.beta);
 model.beta2 = gather(model.beta2);
