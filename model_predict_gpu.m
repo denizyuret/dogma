@@ -176,7 +176,7 @@ else % dual model
         fprintf('gpu:%g Allocating margins: %g\n', gpudev.FreeMemory/8, nc*nx);
         margins = zeros(nc, nx, 'gpuArray');
         wait(gpuDevice);
-        nk = floor((gpudev.FreeMemory/8) / (2*ns+nd));
+        nk = floor(0.9 * (gpudev.FreeMemory/8) / (2*ns+nd));
         assert(nk > 1);
         fprintf('gpu:%g Processing %d chunks of ksize:%dx%d (numel:%g).\n', ...
                 gpudev.FreeMemory/8, ceil(nx/nk), ns, nk, (ns*nk));
