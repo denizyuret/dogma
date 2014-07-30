@@ -1,4 +1,4 @@
-function model = k_perceptron_multi_train_gpu(X,Y,model)
+function model = k_perceptron_multi_train_dbg(X,Y,model)
 % K_PERCEPTRON_MULTI_TRAIN Kernel Perceptron multiclass algorithm
 %
 %    MODEL = K_PERCEPTRON_MULTI_TRAIN(X,Y,MODEL) trains a multiclass
@@ -125,7 +125,13 @@ for epoch=1:model.epochs
     wait(gpuDevice);
     nk = floor(0.9 * (gpu.FreeMemory/8) / (2*ns+2*nd+5*nc+10));
     nk = min(nk, model.batchsize);
-    assert(nk >= 1);
+    if nk == 0
+      % make a last ditch effort
+      new_sv_block();
+      nk = floor(0.9 * (gpu.FreeMemory/8) / (2*ns+2*nd+5*nc+10));
+    end
+    assert(nk >= 1, 'g=%g nk=%d sv=%g beta=%g beta2=%g, no space left.\n', gpu.FreeMemory/8, ...
+           nk, numel(SVtr{1}), numel(model.beta), numel(model.beta2));
     if (nk < model.batchsize && ~batchsize_warning)
       fprintf('g=%g Going to batchsize <= %d due to memory limit.\n', gpu.FreeMemory/8, nk);
       batchsize_warning=1;
@@ -146,6 +152,7 @@ for epoch=1:model.epochs
         svj = svi + size(sv, 1) - 1;    % 929us
         val_f = val_f + model.beta(:,svi:svj) * (hp.gamma * full(sv * xij) + hp.coef0) .^ hp.degree; % 166061us
         svi = svj + 1;
+        clear sv;
       end
       clear xij;
       assert(svj == ns);
@@ -183,19 +190,7 @@ for epoch=1:model.epochs
       nu = numel(updates_i);
       assert(nu < sv_block_size);
       if nu + size(SVtr{end}, 1) > sv_block_size
-        assert(numel(SVtr) <= 2);
-        if (numel(SVtr) == 2)
-          fprintf('g:%g merging sv blocks %dx%d %dx%d\n', gpu.FreeMemory/8, ...
-                  size(SVtr{1}), size(SVtr{2}));
-          sv1 = [ gather(SVtr{1}); gather(SVtr{2}) ];
-          clear SVtr{1}; clear SVtr{2}; wait(gpuDevice);
-          fprintf('g:%g merging to one sv block %dx%d=%d\n', ...
-                  gpu.FreeMemory/8, size(sv1), numel(sv1));
-          SVtr{1} = gpuArray(sv1); wait(gpuDevice);
-          clear sv1;
-          fprintf('g:%g done with merge\n', gpu.FreeMemory/8);
-        end
-        SVtr{2} = zeros(0, nd, 'gpuArray');
+        new_sv_block();
       end
 
       SVtr{end} = [ SVtr{end}; X(:,updates_i)' ];
@@ -241,6 +236,38 @@ model.SV = [];
 for svblock=1:numel(SVtr)
   model.SV = [ model.SV gather(SVtr{svblock})' ];
   clear SVtr{svblock};
+end
+
+function new_sv_block()
+assert(numel(SVtr) <= 2);
+if (numel(SVtr) == 2)
+  fprintf('g:%g merging sv blocks %dx%d %dx%d\n', gpu.FreeMemory/8, ...
+          size(SVtr{1}), size(SVtr{2}));
+  sv1 = [ gather(SVtr{1}); gather(SVtr{2}) ];
+  model.beta = gather(model.beta);
+  model.beta2 = gather(model.beta2);
+  model.S = gather(model.S);
+  if exist('updates')
+    updates = gather(updates);
+    updates_i = gather(updates_i);
+  end
+  wait(gpuDevice);
+  reset(gpuDevice);
+  fprintf('g:%g merging to one sv block %dx%d=%d\n', ...
+          gpu.FreeMemory/8, size(sv1), numel(sv1));
+  SVtr{1} = gpuArray(sv1); 
+  wait(gpuDevice);
+  clear sv1;
+  model.beta = gpuArray(model.beta);
+  model.S = gpuArray(model.S);
+  if exist('updates')
+    updates = gpuArray(updates);
+    updates_i = gpuArray(updates_i);
+  end
+  fprintf('g:%g done with merge\n', gpu.FreeMemory/8);
+end
+SVtr{2} = zeros(0, nd, 'gpuArray');
+wait(gpuDevice);
 end
 
 end % k_perceptron_multi_train_gpu
