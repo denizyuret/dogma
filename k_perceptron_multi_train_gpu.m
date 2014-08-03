@@ -1,4 +1,4 @@
-function model = k_perceptron_multi_train_dbg(X,Y,model)
+function model = k_perceptron_multi_train_gpu(X,Y,model)
 % K_PERCEPTRON_MULTI_TRAIN Kernel Perceptron multiclass algorithm
 %
 %    MODEL = K_PERCEPTRON_MULTI_TRAIN(X,Y,MODEL) trains a multiclass
@@ -215,7 +215,7 @@ for epoch=1:model.epochs
 
     % ti=10;wait(gpuDevice); model.t(ti) = model.t(ti)+toc(); 
 
-    if mod(model.iter,model.step)==0      % 1037us
+    if mod(j,model.step)==0      % 1037us
       fprintf('#%.0f g:%g nk:%d SV:%5.2f(%d)\tAER:%5.2f\tt=%g\n', ...
               j, gpu.FreeMemory/8,nk,numel(model.S)/j*100,numel(model.S),model.aer(model.iter)*100,toc());
     end % if                                  % 881μs/916μs
